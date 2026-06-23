@@ -128,8 +128,14 @@ def _lang_ok(card: dict, lang: str) -> bool:
 def _name_matches(card: dict, query: str) -> bool:
     name  = (card.get("card_info") or {}).get("name", "")
     clean = re.sub(r"\(.*?\)", "", name)
-    clean = re.sub(r"\s*-\s*\d+/\d+.*$", "", clean).strip()
-    return query.lower() in clean.lower()
+    clean = re.sub(r"\s*-\s*\d+/\d+.*$", "", clean).strip().lower()
+    q = query.strip().lower()
+    if q in clean:
+        return True
+    # Word-by-word fallback — single letters (X, V, M) are skipped so
+    # "Charizard X ex" still matches a card named "Charizard ex"
+    words = [w for w in q.split() if len(w) > 1]
+    return bool(words) and all(w in clean for w in words)
 
 def _number_matches(card: dict, number: str) -> bool:
     card_num = (card.get("card_info") or {}).get("card_number") or ""
