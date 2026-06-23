@@ -659,10 +659,7 @@ async def _fetch(query: str, lang: str):
     global _rate_info
     async with aiohttp.ClientSession() as session:
         headers = {"X-API-Key": POKEWALLET_KEY}
-        # Strip standalone single letters (X, V, M…) so "Charizard X ex"
-        # hits the API as "Charizard ex" and actually returns results
-        api_q = " ".join(w for w in query.split() if len(w) > 1) or query
-        params  = {"q": api_q, "limit": 100}
+        params  = {"q": query, "limit": 250}
         async with session.get(f"{POKEWALLET_BASE}/search", headers=headers, params=params) as resp:
             if resp.status == 429:
                 return None, _err(
