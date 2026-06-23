@@ -672,10 +672,9 @@ async def _fetch(query: str, lang: str):
     # 2. Also search "Mega <base>" so "Charizard" finds "Mega Charizard X ex" etc.
     stripped = " ".join(w for w in query.split() if len(w) > 1) or query
     base     = next((w for w in query.split() if len(w) > 2), query)
-    queries  = dict.fromkeys([stripped, f"Mega {base}"])  # dedup, preserve order
 
     async with aiohttp.ClientSession() as session:
-        # Use the first (primary) query to capture rate-limit headers
+        # Primary query — also captures rate-limit headers
         headers = {"X-API-Key": POKEWALLET_KEY}
         async with session.get(f"{POKEWALLET_BASE}/search", headers=headers,
                                params={"q": stripped, "limit": 250}) as resp:
@@ -699,13 +698,17 @@ async def _fetch(query: str, lang: str):
             data = await resp.json()
         primary = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
 
-        # Supplemental "Mega" search — catches "Mega Charizard X ex" etc.
-        mega_results = await _api_search(session, f"Mega {base}")
+        # Supplemental searches run in parallel
+        extras = [f"Mega {base}"]
+        if "ex" not in stripped.lower():
+            extras.append(f"{base} ex")   # catches SV-era "Charizard ex" cards
+        extra_lists = await asyncio.gather(*[_api_search(session, q) for q in extras])
 
     # Merge, deduplicate by (name, card_number, set_code)
     seen = set()
     merged = []
-    for card in primary + mega_results:
+    supplemental = [c for sub in extra_lists for c in sub]
+    for card in primary + supplemental:
         info = card.get("card_info") or {}
         key  = (info.get("name"), info.get("card_number"), info.get("set_code"))
         if key not in seen:
