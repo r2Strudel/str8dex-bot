@@ -19,7 +19,7 @@ VENV_PYTHON = BASE_DIR / "venv" / "bin" / "python"
 BOT_SCRIPT = BASE_DIR / "bot.py"
 CACHE_TTL = 5 * 24 * 60 * 60
 
-ENV_KEYS = ["POKEWALLET_KEY", "FORUM_CHANNEL_ID"]
+ENV_KEYS = ["POKEWALLET_KEY", "FORUM_CHANNEL_ID", "SEARCH_CHANNEL_ID"]
 
 
 def read_env() -> dict:

@@ -30,6 +30,7 @@ source venv/bin/activate && python -u bot.py
 | `DISCORD_TOKEN` | Bot token from Discord Developer Portal |
 | `POKEWALLET_KEY` | PokeWallet API key |
 | `FORUM_CHANNEL_ID` | Discord forum channel ID where card posts are created |
+| `SEARCH_CHANNEL_ID` | Text channel ID where the bot posts a persistent "Search Card 🔍" button |
 
 `POKEPRICE_KEY` is in `.env` but unused — PokemonPriceTracker was removed due to rate limits.
 
@@ -62,9 +63,11 @@ Everything lives in `bot.py`. There are no modules or packages.
 
 **UI components**:
 - `CardBrowserView` — ephemeral view holding all filtered cards and pagination state
-- `CardDropdown` — `max_values=3`, option `value` is the absolute index into `all_cards` (survives pagination)
+- `CardDropdown` — `max_values=3`, option `value` is the absolute index into `all_cards` (survives pagination). Selecting cards shows a "X Card(s) Selected" confirmation embed — card images are NOT shown until the user presses Show Card.
+- `ShowButton` — must be pressed to display card image embeds; disabled until a selection is made
 - `PostButton` — when `forum_mode=True` (set when `FORUM_CHANNEL_ID` is configured), clicking it opens `ForumPostModal` instead of posting directly
 - `ForumPostModal` — required text input; on submit, creates a new thread in the forum channel with `interaction.user.mention`, the user's message, and the card embed(s)
+- `PersistentSearchView` / `SearchButton` — posted to `SEARCH_CHANNEL_ID` on startup; `timeout=None` so it survives restarts. Bot deletes old search button messages on startup and reposts at the bottom.
 
 **Rate limit info** is read from PokeWallet response headers (`X-RateLimit-Remaining-Hour`, `X-RateLimit-Remaining-Day`) into the `_rate_info` global and shown in the search summary embed.
 

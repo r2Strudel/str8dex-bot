@@ -1,6 +1,7 @@
 import re
 import json
 import time
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -14,7 +15,8 @@ load_dotenv()
 DISCORD_TOKEN    = os.getenv("DISCORD_TOKEN")
 POKEWALLET_KEY   = os.getenv("POKEWALLET_KEY")
 POKEWALLET_BASE  = "https://api.pokewallet.io"
-FORUM_CHANNEL_ID = int(os.getenv("FORUM_CHANNEL_ID", "0"))
+FORUM_CHANNEL_ID  = int(os.getenv("FORUM_CHANNEL_ID",  "0"))
+SEARCH_CHANNEL_ID = int(os.getenv("SEARCH_CHANNEL_ID", "0"))
 
 CACHE_FILE = Path(__file__).parent / "cache.json"
 CACHE_TTL  = 5 * 24 * 60 * 60   # 5 days in seconds
@@ -204,7 +206,8 @@ class CardBrowserView(discord.ui.View):
         self.page           = 0
         self.selected_cards = []
         self.post_btn       = PostButton(bool(FORUM_CHANNEL_ID))
-        self._refresh()
+        self.show_btn       = ShowButton()
+        self._rebuild()
 
     @property
     def total_pages(self):
@@ -214,7 +217,7 @@ class CardBrowserView(discord.ui.View):
         s = self.page * PER_PAGE
         return self.all_cards[s:s + PER_PAGE], s
 
-    def _refresh(self):
+    def _rebuild(self):
         self.clear_items()
         page_cards, offset = self._page_slice()
         self.add_item(CardDropdown(page_cards, offset))
@@ -222,6 +225,7 @@ class CardBrowserView(discord.ui.View):
             self.add_item(PrevButton())
         if self.page < self.total_pages - 1:
             self.add_item(NextButton())
+        self.add_item(self.show_btn)
         self.add_item(self.post_btn)
 
     def _summary_embed(self) -> discord.Embed:
@@ -246,7 +250,7 @@ class CardBrowserView(discord.ui.View):
             f"{source_line}\n"
             f"{lang_label}  •  **{len(self.all_cards)}** card(s) found  •  "
             f"page {self.page + 1}/{self.total_pages} (showing {s}–{e})\n\n"
-            "Pick **up to 3 cards** from the dropdown to preview image & price.\n"
+            "Pick **up to 3 cards** from the dropdown, then hit **Show Card 🖼️** to preview.\n"
             + ("Hit **Post to Forum 📋** to create a new forum post with your selection." if FORUM_CHANNEL_ID
                else "Hit **Post to Chat 📢** to share your selection.")
         )
@@ -254,13 +258,19 @@ class CardBrowserView(discord.ui.View):
 
     async def go_page(self, interaction: discord.Interaction, delta: int):
         self.page += delta
-        self._refresh()
-        if self.selected_cards:
-            await interaction.response.edit_message(
-                embeds=[make_embed(c) for c in self.selected_cards], view=self
-            )
-        else:
-            await interaction.response.edit_message(embed=self._summary_embed(), view=self)
+        self._rebuild()
+        await interaction.response.edit_message(embed=self._summary_embed(), view=self)
+
+    def _selected_embed(self) -> discord.Embed:
+        count = len(self.selected_cards)
+        names = [(c.get("card_info") or {}).get("name") or "Card" for c in self.selected_cards]
+        desc  = "\n".join(f"• {n}" for n in names)
+        desc += "\n\nPress **Show Card 🖼️** to preview."
+        return discord.Embed(
+            title=f"{count} Card{'s' if count > 1 else ''} Selected",
+            description=desc,
+            color=0xFFCB05,
+        )
 
     async def on_timeout(self):
         for item in self.children:
@@ -292,8 +302,10 @@ class CardDropdown(discord.ui.Select):
         icon = "📋" if self.view.post_btn.forum_mode else "📢"
         self.view.post_btn.disabled = False
         self.view.post_btn.label    = f"Post {count} Card{'s' if count > 1 else ''} {icon}"
+        self.view.show_btn.disabled = False
+        self.view.show_btn.label    = f"Show {'Cards' if count > 1 else 'Card'} 🖼️"
         await interaction.response.edit_message(
-            embeds=[make_embed(c) for c in selected], view=self.view
+            embeds=[self.view._selected_embed()], view=self.view
         )
 
 
@@ -311,6 +323,39 @@ class NextButton(discord.ui.Button):
         await self.view.go_page(interaction, +1)
 
 
+class ShowButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Show Card 🖼️", style=discord.ButtonStyle.secondary, disabled=True, row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not self.view.selected_cards:
+            await interaction.response.defer()
+            return
+        await interaction.response.edit_message(
+            embeds=[make_embed(c) for c in self.view.selected_cards], view=self.view
+        )
+
+
+class AddPhotosButton(discord.ui.Button):
+    def __init__(self, thread: discord.Thread):
+        super().__init__(label="Add Trade Photos 📷", style=discord.ButtonStyle.secondary, row=2)
+        self.thread = thread
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.thread.send(
+            f"{interaction.user.mention} — reply here with photos of cards you have to trade! 📷"
+        )
+        await interaction.response.defer()
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+        await interaction.followup.send(
+            f"Prompt posted! Jump to the thread: {self.thread.jump_url}",
+            ephemeral=True,
+        )
+
+
 class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
     message = discord.ui.TextInput(
         label="What do you want to say?",
@@ -325,6 +370,8 @@ class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
         self.card_view = card_view
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()  # close modal immediately; gives time for slow API call
+
         embeds      = [make_embed(c) for c in self.card_view.selected_cards]
         names       = [(c.get("card_info") or {}).get("name") or "Card" for c in self.card_view.selected_cards]
         thread_name = " / ".join(names)[:100]
@@ -335,10 +382,11 @@ class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
             content += f"\n{user_msg}"
 
         posted = False
+        thread = None
         if FORUM_CHANNEL_ID and interaction.guild:
             forum = interaction.guild.get_channel(FORUM_CHANNEL_ID)
             if isinstance(forum, discord.ForumChannel):
-                await forum.create_thread(name=thread_name, content=content, embeds=embeds)
+                thread = (await forum.create_thread(name=thread_name, content=content, embeds=embeds)).thread
                 posted = True
 
         if not posted and interaction.channel:
@@ -347,7 +395,18 @@ class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
         count = len(embeds)
         self.card_view.post_btn.disabled = True
         self.card_view.post_btn.label    = f"✅ Posted {count} Card{'s' if count > 1 else ''}!"
-        await interaction.response.edit_message(view=self.card_view)
+        if thread:
+            self.card_view.add_item(AddPhotosButton(thread))
+        await interaction.edit_original_response(view=self.card_view)
+
+        async def _auto_delete():
+            await asyncio.sleep(8)
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
+        asyncio.create_task(_auto_delete())
 
 
 class PostButton(discord.ui.Button):
@@ -372,6 +431,64 @@ class PostButton(discord.ui.Button):
             self.label    = f"✅ Posted {count} Card{'s' if count > 1 else ''}!"
             await interaction.edit_original_response(view=self.view)
 
+            async def _auto_delete():
+                await asyncio.sleep(5)
+                try:
+                    await interaction.delete_original_response()
+                except Exception:
+                    pass
+
+            asyncio.create_task(_auto_delete())
+
+
+# ── Persistent search button (always-at-bottom UX) ───────────────────────────
+
+class SearchButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Search Card 🔍",
+            style=discord.ButtonStyle.primary,
+            custom_id="str8dex:search_card",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CardSearchModal())
+
+
+class PersistentSearchView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(SearchButton())
+
+
+class CardSearchModal(discord.ui.Modal, title="Search Pokemon Card"):
+    card_name = discord.ui.TextInput(
+        label="Pokemon Name",
+        placeholder="e.g. Charizard, Pikachu",
+        required=True,
+        max_length=100,
+    )
+    language = discord.ui.TextInput(
+        label="Language  (english / japanese)",
+        placeholder="english",
+        required=False,
+        max_length=20,
+    )
+    number = discord.ui.TextInput(
+        label="Card Number  (optional)",
+        placeholder="e.g. 4,  025/102",
+        required=False,
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        lang_raw = (self.language.value or "").strip().lower()
+        lang     = "japanese" if "jap" in lang_raw else "english"
+        number   = self.number.value.strip() or None
+        name     = self.card_name.value.strip()
+        await _run_card_search(interaction, name, lang, number)
+
 
 # ── Bot events ────────────────────────────────────────────────────────────────
 
@@ -393,6 +510,7 @@ async def on_ready():
         except Exception as e:
             print(f"Sync failed for {guild.name}: {e}", flush=True)
     daily_cache_cleanup.start()
+    await _post_search_button()
     print("Bot is ready.", flush=True)
 
 
@@ -419,29 +537,39 @@ async def _load_set_languages():
         print(f"Could not load set languages: {e}", flush=True)
 
 
-# ── Slash command ─────────────────────────────────────────────────────────────
+async def _post_search_button():
+    """Delete any old bot search button in SEARCH_CHANNEL_ID and repost at bottom."""
+    if not SEARCH_CHANNEL_ID:
+        return
+    channel = bot.get_channel(SEARCH_CHANNEL_ID)
+    if not channel:
+        print("Search channel not found — set SEARCH_CHANNEL_ID in .env", flush=True)
+        return
 
-@bot.tree.command(name="card", description="Look up Pokemon card prices on PokeWallet")
-@app_commands.describe(
-    name="Pokemon name (e.g. Charizard, Pikachu)",
-    language="Card language — defaults to English",
-    number="Card number to narrow results (e.g. 4, 025/102) — optional",
-)
-@app_commands.choices(language=[
-    app_commands.Choice(name="English",  value="english"),
-    app_commands.Choice(name="Japanese", value="japanese"),
-])
-async def card_cmd(
-    interaction: discord.Interaction,
-    name: str,
-    language: app_commands.Choice[str] = None,
-    number: str = None,
-):
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    lang = language.value if language else "english"
+    async for msg in channel.history(limit=50):
+        if msg.author == bot.user and msg.components:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
 
+    embed = discord.Embed(
+        title="Pokemon Card Search",
+        description=(
+            "Click **Search Card 🔍** to look up a card's price.\n\n"
+            "Results are private — only you see them.\n"
+            "You can then post selected cards to the forum from the results."
+        ),
+        color=0xFFCB05,
+    )
+    embed.set_footer(text="Powered by PokeWallet  •  Str8Dex")
+    await channel.send(embed=embed, view=PersistentSearchView())
+    print(f"Search button posted in #{channel.name}", flush=True)
+
+
+async def _run_card_search(interaction: discord.Interaction, name: str, lang: str, number: str | None):
+    """Shared search logic used by both the modal and the /card command."""
     try:
-        # ── Check cache first ──
         cached_cards, cache_age = _get_cached(name, lang)
         from_cache = cached_cards is not None
 
@@ -454,7 +582,6 @@ async def card_cmd(
                 return
             _set_cache(name, lang, cards)
 
-        # Apply card number filter
         if number:
             cards = [c for c in cards if _number_matches(c, number)]
 
@@ -476,19 +603,40 @@ async def card_cmd(
             view.post_btn.disabled = False
             icon = "📋" if FORUM_CHANNEL_ID else "📢"
             view.post_btn.label    = f"Post 1 Card {icon}"
-            await interaction.followup.send(
-                embed=make_embed(cards[0]), view=view, ephemeral=True
-            )
+            view.show_btn.disabled = False
+            view.show_btn.label    = "Show Card 🖼️"
+            await interaction.followup.send(embed=view._selected_embed(), view=view, ephemeral=True)
         else:
-            await interaction.followup.send(
-                embed=view._summary_embed(), view=view, ephemeral=True
-            )
+            await interaction.followup.send(embed=view._summary_embed(), view=view, ephemeral=True)
 
     except Exception as exc:
         await interaction.followup.send(
             embed=discord.Embed(title="Error", description=str(exc), color=discord.Color.red()),
             ephemeral=True,
         )
+
+
+# ── Slash command ─────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="card", description="Look up Pokemon card prices on PokeWallet")
+@app_commands.describe(
+    name="Pokemon name (e.g. Charizard, Pikachu)",
+    language="Card language — defaults to English",
+    number="Card number to narrow results (e.g. 4, 025/102) — optional",
+)
+@app_commands.choices(language=[
+    app_commands.Choice(name="English",  value="english"),
+    app_commands.Choice(name="Japanese", value="japanese"),
+])
+async def card_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    language: app_commands.Choice[str] = None,
+    number: str = None,
+):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    lang = language.value if language else "english"
+    await _run_card_search(interaction, name, lang, number)
 
 
 # ── API fetch ─────────────────────────────────────────────────────────────────
@@ -529,4 +677,5 @@ def _err(title: str, desc: str = "") -> discord.Embed:
     return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
 
+bot.add_view(PersistentSearchView())
 bot.run(DISCORD_TOKEN)

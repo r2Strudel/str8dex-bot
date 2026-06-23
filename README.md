@@ -15,8 +15,8 @@ A Discord slash-command bot that lets users search for Pokemon TCG card prices v
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/discord-pokemon-bot.git
-cd discord-pokemon-bot
+git clone https://github.com/Horuhee/str8dex-bot.git
+cd str8dex-bot
 ```
 
 ### 2. Run setup
@@ -27,24 +27,29 @@ bash setup.sh
 
 This creates a Python virtual environment and installs dependencies.
 
-### 3. Configure via the dashboard
+### 3. Configure your credentials
 
-Start the dashboard:
+Copy the example env file and fill it in:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Where to get it |
+|---|---|
+| `DISCORD_TOKEN` | [Discord Developer Portal](https://discord.com/developers/applications) → Your App → Bot → Token |
+| `POKEWALLET_KEY` | [PokeWallet](https://pokewallet.io) → API Keys |
+| `FORUM_CHANNEL_ID` | Right-click your Discord **forum** channel → Copy Channel ID (requires Developer Mode) |
+| `SEARCH_CHANNEL_ID` | Right-click a regular **text** channel → Copy Channel ID — the bot posts a persistent search button here |
+
+**Or configure via the dashboard:**
 
 ```bash
 source venv/bin/activate
 python dashboard.py
 ```
 
-Open `http://localhost:5000` in your browser and fill in:
-
-| Field | Where to get it |
-|---|---|
-| `DISCORD_TOKEN` | [Discord Developer Portal](https://discord.com/developers/applications) → Your App → Bot → Token |
-| `POKEWALLET_KEY` | [PokeWallet](https://pokewallet.io) → API Keys |
-| `FORUM_CHANNEL_ID` | Right-click your Discord forum channel → Copy Channel ID (requires Developer Mode) |
-
-Click **Save**, then click **Start Bot**.
+Open `http://localhost:5000`, fill in the fields, click **Save**, then click **Start Bot**.
 
 ### 4. (Optional) Run without the dashboard
 
