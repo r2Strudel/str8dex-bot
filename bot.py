@@ -142,8 +142,16 @@ def _number_matches(card: dict, number: str) -> bool:
     if not card_num:
         return False
     def norm(s):
-        return re.sub(r"(?<![A-Za-z])0+(\d)", r"\1", s.strip().lower())
-    return norm(number) in norm(card_num)
+        return re.sub(r"^0+(\d)", r"\1", s.strip().lower())
+    q = norm(number)
+    for part in re.split(r"[/\s]+", card_num.strip()):
+        if norm(part) == q:
+            return True
+        # Also match trailing digits so "15" matches "GG15" or "TG15"
+        m = re.search(r"(\d+)$", part)
+        if m and norm(m.group(1)) == q:
+            return True
+    return False
 
 
 # ── Embed builder ─────────────────────────────────────────────────────────────
