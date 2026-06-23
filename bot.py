@@ -364,10 +364,7 @@ class AddPhotosButton(discord.ui.Button):
             await interaction.delete_original_response()
         except Exception:
             pass
-        await interaction.followup.send(
-            f"Prompt posted! Jump to the thread: {self.thread.jump_url}",
-            ephemeral=True,
-        )
+        await _temp_send(interaction, content=f"Prompt posted! Jump to the thread: {self.thread.jump_url}")
 
 
 class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
@@ -586,6 +583,18 @@ async def _post_search_button():
     print(f"Search button posted in #{channel.name}", flush=True)
 
 
+async def _temp_send(interaction: discord.Interaction, delay: int = 10, **kwargs):
+    """Send an ephemeral followup and auto-delete it after `delay` seconds."""
+    msg = await interaction.followup.send(ephemeral=True, **kwargs)
+    async def _del():
+        await asyncio.sleep(delay)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    asyncio.create_task(_del())
+
+
 async def _run_card_search(interaction: discord.Interaction, name: str, lang: str, number: str | None):
     """Shared search logic used by both the modal and the /card command."""
     try:
@@ -597,7 +606,7 @@ async def _run_card_search(interaction: discord.Interaction, name: str, lang: st
         else:
             cards, err = await _fetch(name, lang)
             if err:
-                await interaction.followup.send(embed=err, ephemeral=True)
+                await _temp_send(interaction, embed=err)
                 return
             _set_cache(name, lang, cards)
 
@@ -609,10 +618,9 @@ async def _run_card_search(interaction: discord.Interaction, name: str, lang: st
             desc = f'No {lang_label} cards found for **{name}**'
             if number:
                 desc += f' with number **{number}**'
-            await interaction.followup.send(
-                embed=discord.Embed(title="No Results", description=desc + ".", color=discord.Color.orange()),
-                ephemeral=True,
-            )
+            await _temp_send(interaction, embed=discord.Embed(
+                title="No Results", description=desc + ".", color=discord.Color.orange(),
+            ))
             return
 
         view = CardBrowserView(cards, name, number, lang, from_cache, cache_age or 0)
@@ -629,10 +637,9 @@ async def _run_card_search(interaction: discord.Interaction, name: str, lang: st
             await interaction.followup.send(embed=view._summary_embed(), view=view, ephemeral=True)
 
     except Exception as exc:
-        await interaction.followup.send(
-            embed=discord.Embed(title="Error", description=str(exc), color=discord.Color.red()),
-            ephemeral=True,
-        )
+        await _temp_send(interaction, embed=discord.Embed(
+            title="Error", description=str(exc), color=discord.Color.red(),
+        ))
 
 
 # ── Slash command ─────────────────────────────────────────────────────────────
