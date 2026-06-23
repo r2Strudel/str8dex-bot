@@ -400,7 +400,12 @@ class ForumPostModal(discord.ui.Modal, title="Post to Forum"):
         if FORUM_CHANNEL_ID and interaction.guild:
             forum = interaction.guild.get_channel(FORUM_CHANNEL_ID)
             if isinstance(forum, discord.ForumChannel):
-                thread = (await forum.create_thread(name=thread_name, content=content, embeds=embeds)).thread
+                # Some forum channels require at least one tag; pick the first available one
+                applied_tags = [forum.available_tags[0]] if forum.available_tags else []
+                thread = (await forum.create_thread(
+                    name=thread_name, content=content, embeds=embeds,
+                    applied_tags=applied_tags,
+                )).thread
                 posted = True
 
         if not posted and interaction.channel:
