@@ -655,12 +655,30 @@ async def card_cmd(
 
 # ── API fetch ─────────────────────────────────────────────────────────────────
 
+async def _api_search(session: aiohttp.ClientSession, q: str) -> list:
+    headers = {"X-API-Key": POKEWALLET_KEY}
+    async with session.get(f"{POKEWALLET_BASE}/search", headers=headers,
+                           params={"q": q, "limit": 250}) as resp:
+        if resp.status != 200:
+            return []
+        data = await resp.json()
+        return data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+
+
 async def _fetch(query: str, lang: str):
     global _rate_info
+    # Build query variants:
+    # 1. Strip standalone single letters (X, V, M) so "Charizard X ex" → "Charizard ex"
+    # 2. Also search "Mega <base>" so "Charizard" finds "Mega Charizard X ex" etc.
+    stripped = " ".join(w for w in query.split() if len(w) > 1) or query
+    base     = next((w for w in query.split() if len(w) > 2), query)
+    queries  = dict.fromkeys([stripped, f"Mega {base}"])  # dedup, preserve order
+
     async with aiohttp.ClientSession() as session:
+        # Use the first (primary) query to capture rate-limit headers
         headers = {"X-API-Key": POKEWALLET_KEY}
-        params  = {"q": query, "limit": 250}
-        async with session.get(f"{POKEWALLET_BASE}/search", headers=headers, params=params) as resp:
+        async with session.get(f"{POKEWALLET_BASE}/search", headers=headers,
+                               params={"q": stripped, "limit": 250}) as resp:
             if resp.status == 429:
                 return None, _err(
                     "Rate Limit — PokeWallet",
@@ -672,8 +690,6 @@ async def _fetch(query: str, lang: str):
                 return None, _err("Auth Error", "Invalid PokeWallet API key.")
             if resp.status != 200:
                 return None, _err(f"API Error {resp.status}")
-
-            # Store rate limit info from response headers
             _rate_info = {
                 "remaining_hour": resp.headers.get("X-RateLimit-Remaining-Hour", "?"),
                 "remaining_day":  resp.headers.get("X-RateLimit-Remaining-Day",  "?"),
@@ -681,8 +697,22 @@ async def _fetch(query: str, lang: str):
                 "limit_day":      resp.headers.get("X-RateLimit-Limit-Day",  "?"),
             }
             data = await resp.json()
+        primary = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
 
-    raw      = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+        # Supplemental "Mega" search — catches "Mega Charizard X ex" etc.
+        mega_results = await _api_search(session, f"Mega {base}")
+
+    # Merge, deduplicate by (name, card_number, set_code)
+    seen = set()
+    merged = []
+    for card in primary + mega_results:
+        info = card.get("card_info") or {}
+        key  = (info.get("name"), info.get("card_number"), info.get("set_code"))
+        if key not in seen:
+            seen.add(key)
+            merged.append(card)
+
+    raw      = merged
     filtered = [c for c in raw if _lang_ok(c, lang) and _name_matches(c, query)]
     return filtered, None
 
